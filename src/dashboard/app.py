@@ -1,13 +1,8 @@
-# src/dashboard/app.py
 import streamlit as st
+import pandas as pd
+import plotly.express as px
 from datetime import datetime, timedelta
 from dashboard.database import get_db_connection, load_stock_data, load_sp500_data
-from dashboard.components.charts import (
-    plot_price_movement,
-    plot_volume,
-    plot_price_vs_vwap,
-)
-from dashboard.components.metrics import display_key_metrics
 
 
 def main():
@@ -27,28 +22,64 @@ def main():
         selected_ticker = st.sidebar.selectbox("Select Stock", tickers)
 
         # Date range
-        max_date = stocks_df["timestamp"].max()
-        min_date = stocks_df["timestamp"].min()
+        min_date = stocks_df["timestamp"].min().date()
+        max_date = stocks_df["timestamp"].max().date()
+        default_start = max_date - timedelta(days=7)
+
         date_range = st.sidebar.date_input(
             "Date Range",
-            value=(max_date - timedelta(days=30), max_date),
+            value=(default_start, max_date),
             min_value=min_date,
             max_value=max_date,
         )
 
-        # Filter data
-        mask = (
-            (stocks_df["ticker"] == selected_ticker)
-            & (stocks_df["timestamp"].dt.date >= date_range[0])
-            & (stocks_df["timestamp"].dt.date <= date_range[1])
-        )
-        filtered_df = stocks_df[mask]
+        # Filter data - fix the date filtering
+        start_date = pd.Timestamp(date_range[0])
+        end_date = pd.Timestamp(date_range[1])
 
-        # Display components
-        display_key_metrics(filtered_df)
-        plot_price_movement(filtered_df, selected_ticker)
-        plot_volume(filtered_df, selected_ticker)
-        plot_price_vs_vwap(filtered_df, selected_ticker)
+        filtered_df = stocks_df[
+            (stocks_df["ticker"] == selected_ticker)
+            & (stocks_df["timestamp"].dt.date >= start_date.date())
+            & (stocks_df["timestamp"].dt.date <= end_date.date())
+        ].copy()  # Create a copy to avoid SettingWithCopyWarning
+
+        if len(filtered_df) > 0:
+            # Display metrics
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                latest_price = filtered_df["close_price"].iloc[-1]
+                st.metric("Latest Price", f"${latest_price:.2f}")
+
+            with col2:
+                price_change = latest_price - filtered_df["close_price"].iloc[0]
+                st.metric("Price Change", f"${price_change:.2f}")
+
+            with col3:
+                volume = filtered_df["volume"].mean()
+                st.metric("Avg Daily Volume", f"{volume:,.0f}")
+
+            # Price chart
+            st.subheader("Price Movement")
+            fig = px.line(
+                filtered_df,
+                x="timestamp",
+                y="close_price",
+                title=f"{selected_ticker} Price Movement",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Volume chart
+            st.subheader("Trading Volume")
+            fig = px.bar(
+                filtered_df,
+                x="timestamp",
+                y="volume",
+                title=f"{selected_ticker} Trading Volume",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No data available for the selected date range")
 
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
